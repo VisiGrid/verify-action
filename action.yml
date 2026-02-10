@@ -28,6 +28,10 @@ inputs:
   source_identity:
     description: 'Source-specific identity (e.g. warehouse table, realm ID, account ID)'
     required: false
+  assertions:
+    description: 'Control total assertions as JSON array (e.g. [{"kind":"sum","column":"amount","expected":"12345.67","tolerance":"0.01"}])'
+    required: false
+    default: '[]'
   fail_on_check_failure:
     description: 'Fail the action if integrity checks fail'
     required: false
@@ -72,6 +76,7 @@ runs:
         VISIHUB_MESSAGE: ${{ inputs.message }}
         VISIHUB_SOURCE_TYPE: ${{ inputs.source_type }}
         VISIHUB_SOURCE_IDENTITY: ${{ inputs.source_identity }}
+        VISIHUB_ASSERTIONS: ${{ inputs.assertions }}
         VISIHUB_FAIL_ON_CHECK: ${{ inputs.fail_on_check_failure }}
       run: |
         bash "${{ github.action_path }}/verify.sh"

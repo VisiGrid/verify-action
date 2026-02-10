@@ -10,6 +10,7 @@ DATASET_PATH="${VISIHUB_DATASET_PATH:-$(basename "$FILE")}"
 MESSAGE="${VISIHUB_MESSAGE:-}"
 SOURCE_TYPE="${VISIHUB_SOURCE_TYPE:-}"
 SOURCE_IDENTITY="${VISIHUB_SOURCE_IDENTITY:-}"
+ASSERTIONS_JSON="${VISIHUB_ASSERTIONS:-[]}"
 FAIL_ON_CHECK="${VISIHUB_FAIL_ON_CHECK:-true}"
 
 AUTH="Authorization: Bearer ${TOKEN}"
@@ -91,6 +92,9 @@ if [[ -n "${SOURCE_TYPE}" || -n "${SOURCE_IDENTITY}" ]]; then
   }
   SM_PARTS="${SM_PARTS},\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
   REV_BODY="${REV_BODY}${SM_PARTS}}"
+fi
+if [[ "${ASSERTIONS_JSON}" != "[]" && -n "${ASSERTIONS_JSON}" ]]; then
+  REV_BODY="${REV_BODY},\"assertions\":${ASSERTIONS_JSON}"
 fi
 REV_BODY="${REV_BODY}}"
 
@@ -196,12 +200,20 @@ if [[ "${DIFF_SUMMARY}" != "null" ]]; then
   COLS_TYPE_CHANGED=$(echo "${DIFF_SUMMARY}" | jq -r '.cols_type_changed // 0')
 fi
 
+# Parse assertion results
+ASSERTIONS_RESULT=$(echo "${RUN}" | jq -c '.assertions // []')
+ASSERTION_COUNT=$(echo "${ASSERTIONS_RESULT}" | jq 'length')
+
 echo ""
 echo "  Verification: ${VERIFICATION}"
 echo "  Check status: ${CHECK_STATUS}"
 echo "  Version:      v${VERSION}"
 if [[ "${DIFF_SUMMARY}" != "null" ]]; then
   echo "  Diff:         rows ${ROW_CHANGE} cols ${COL_CHANGE}"
+fi
+if [[ "${ASSERTION_COUNT}" -gt 0 ]]; then
+  echo "  Assertions:   ${ASSERTION_COUNT}"
+  echo "${ASSERTIONS_RESULT}" | jq -r '.[] | "    \(.kind)(\(.column)): \(.status)\(if .delta then " (delta=\(.delta))" else "" end)"'
 fi
 echo "  Proof URL:    ${PROOF_URL}"
 echo "::endgroup::"
@@ -213,6 +225,7 @@ echo "diff_summary=${DIFF_SUMMARY}" >> "${GITHUB_OUTPUT}"
 echo "run_id=${REVISION_ID}" >> "${GITHUB_OUTPUT}"
 echo "proof_url=${PROOF_URL}" >> "${GITHUB_OUTPUT}"
 echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+echo "assertions=${ASSERTIONS_RESULT}" >> "${GITHUB_OUTPUT}"
 
 # ── Step 9: GitHub Job Summary ───────────────────────────────────
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -261,12 +274,26 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       fi
     fi
 
+    if [[ "${ASSERTION_COUNT}" -gt 0 ]]; then
+      echo ""
+      echo "#### Control Totals"
+      echo ""
+      echo "| Column | Kind | Expected | Actual | Tolerance | Status |"
+      echo "|--------|------|----------|--------|-----------|--------|"
+      echo "${ASSERTIONS_RESULT}" | jq -r '.[] | "| `\(.column)` | \(.kind) | \(.expected // "—") | \(.actual // "—") | \(.tolerance // "—") | \(.status) |"'
+    fi
+
     echo ""
     echo "[Download proof](${PROOF_URL})"
   } >> "${GITHUB_STEP_SUMMARY}"
 fi
 
 # ── Step 10: Annotations ─────────────────────────────────────────
+# Annotation per failed assertion
+if [[ "${ASSERTION_COUNT}" -gt 0 ]]; then
+  echo "${ASSERTIONS_RESULT}" | jq -r '.[] | select(.status == "fail") | "::error title=Assertion Failed: \(.kind)(\(.column))::\(.kind)(\(.column)) expected=\(.expected) actual=\(.actual) delta=\(.delta)"'
+fi
+
 if [[ "${VERIFICATION}" == "FAIL" ]]; then
   # Build a concise failure message for the annotation
   FAIL_MSG="Snapshot integrity check failed for ${DATASET_PATH} v${VERSION}."
