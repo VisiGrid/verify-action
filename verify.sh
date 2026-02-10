@@ -174,6 +174,8 @@ PROOF_URL="${API}/api/repos/${OWNER}/${SLUG}/runs/${REVISION_ID}/proof"
 
 if [[ "${CHECK_STATUS}" == "pass" ]]; then
   VERIFICATION="PASS"
+elif [[ "${CHECK_STATUS}" == "baseline_created" ]]; then
+  VERIFICATION="BASELINE"
 elif [[ "${CHECK_STATUS}" == "fail" ]]; then
   VERIFICATION="FAIL"
 else
@@ -214,10 +216,12 @@ echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
 # ── Step 9: GitHub Job Summary ───────────────────────────────────
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
-  if [[ "${VERIFICATION}" == "PASS" ]]; then
-    BADGE="✅ PASS"
-  else
+  if [[ "${VERIFICATION}" == "BASELINE" ]]; then
+    BADGE="🆕 BASELINE CREATED"
+  elif [[ "${VERIFICATION}" == "FAIL" ]]; then
     BADGE="❌ FAIL"
+  else
+    BADGE="✅ PASS"
   fi
 
   {
@@ -277,6 +281,8 @@ if [[ "${VERIFICATION}" == "FAIL" ]]; then
     fi
   fi
   echo "::error title=VisiHub Verify Failed::${FAIL_MSG}"
+elif [[ "${VERIFICATION}" == "BASELINE" ]]; then
+  echo "::notice title=VisiHub Baseline Created::${DATASET_PATH} v${VERSION} — baseline snapshot established"
 else
   echo "::notice title=VisiHub Verify Passed::${DATASET_PATH} v${VERSION} — integrity check passed"
 fi
