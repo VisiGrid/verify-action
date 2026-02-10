@@ -1,0 +1,69 @@
+name: 'VisiHub Verify'
+description: 'Publish a dataset snapshot to VisiHub and verify its integrity. Get diffs, checks, and signed proofs.'
+author: 'VisiHub'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  api_key:
+    description: 'VisiHub API token (create at app.visihub.app/settings/tokens)'
+    required: true
+  repo:
+    description: 'VisiHub repository in owner/slug format (e.g. acme/payments)'
+    required: true
+  file_path:
+    description: 'Path to the file to publish (CSV, TSV)'
+    required: true
+  dataset_path:
+    description: 'Dataset path in VisiHub (defaults to file basename)'
+    required: false
+  message:
+    description: 'Revision message (e.g. commit SHA, pipeline run ID)'
+    required: false
+  fail_on_check_failure:
+    description: 'Fail the action if integrity checks fail'
+    required: false
+    default: 'true'
+  api_base:
+    description: 'VisiHub API base URL'
+    required: false
+    default: 'https://api.visihub.app'
+
+outputs:
+  verification_status:
+    description: 'PASS or FAIL'
+    value: ${{ steps.verify.outputs.verification_status }}
+  check_status:
+    description: 'pass or fail (from snapshot integrity check)'
+    value: ${{ steps.verify.outputs.check_status }}
+  diff_summary:
+    description: 'JSON string of the diff summary'
+    value: ${{ steps.verify.outputs.diff_summary }}
+  run_id:
+    description: 'VisiHub run/revision ID'
+    value: ${{ steps.verify.outputs.run_id }}
+  proof_url:
+    description: 'URL to download the signed proof'
+    value: ${{ steps.verify.outputs.proof_url }}
+  version:
+    description: 'Dataset version number'
+    value: ${{ steps.verify.outputs.version }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Publish and verify
+      id: verify
+      shell: bash
+      env:
+        VISIHUB_API_KEY: ${{ inputs.api_key }}
+        VISIHUB_API_BASE: ${{ inputs.api_base }}
+        VISIHUB_REPO: ${{ inputs.repo }}
+        VISIHUB_FILE_PATH: ${{ inputs.file_path }}
+        VISIHUB_DATASET_PATH: ${{ inputs.dataset_path }}
+        VISIHUB_MESSAGE: ${{ inputs.message }}
+        VISIHUB_FAIL_ON_CHECK: ${{ inputs.fail_on_check_failure }}
+      run: |
+        bash "${{ github.action_path }}/verify.sh"
