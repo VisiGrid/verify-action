@@ -8,6 +8,8 @@ REPO="${VISIHUB_REPO}"
 FILE="${VISIHUB_FILE_PATH}"
 DATASET_PATH="${VISIHUB_DATASET_PATH:-$(basename "$FILE")}"
 MESSAGE="${VISIHUB_MESSAGE:-}"
+SOURCE_TYPE="${VISIHUB_SOURCE_TYPE:-}"
+SOURCE_IDENTITY="${VISIHUB_SOURCE_IDENTITY:-}"
 FAIL_ON_CHECK="${VISIHUB_FAIL_ON_CHECK:-true}"
 
 AUTH="Authorization: Bearer ${TOKEN}"
@@ -78,6 +80,17 @@ echo "Creating revision..."
 REV_BODY="{\"byte_size\":${BYTE_SIZE}"
 if [[ -n "${HASH}" && "${HASH}" == blake3:* ]]; then
   REV_BODY="${REV_BODY},\"content_hash\":\"${HASH}\""
+fi
+if [[ -n "${SOURCE_TYPE}" || -n "${SOURCE_IDENTITY}" ]]; then
+  REV_BODY="${REV_BODY},\"source_metadata\":{"
+  SM_PARTS=""
+  [[ -n "${SOURCE_TYPE}" ]] && SM_PARTS="\"type\":\"${SOURCE_TYPE}\""
+  [[ -n "${SOURCE_IDENTITY}" ]] && {
+    [[ -n "${SM_PARTS}" ]] && SM_PARTS="${SM_PARTS},"
+    SM_PARTS="${SM_PARTS}\"identity\":\"${SOURCE_IDENTITY}\""
+  }
+  SM_PARTS="${SM_PARTS},\"timestamp\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\""
+  REV_BODY="${REV_BODY}${SM_PARTS}}"
 fi
 REV_BODY="${REV_BODY}}"
 
@@ -155,6 +168,8 @@ fi
 CHECK_STATUS=$(echo "${RUN}" | jq -r '.check_status // "none"')
 DIFF_SUMMARY=$(echo "${RUN}" | jq -c '.diff_summary // null')
 VERSION=$(echo "${RUN}" | jq -r '.version')
+ROW_COUNT=$(echo "${RUN}" | jq -r '.row_count // "—"')
+COL_COUNT=$(echo "${RUN}" | jq -r '.col_count // "—"')
 PROOF_URL="${API}/api/repos/${OWNER}/${SLUG}/runs/${REVISION_ID}/proof"
 
 if [[ "${CHECK_STATUS}" == "pass" ]]; then
@@ -165,14 +180,26 @@ else
   VERIFICATION="PASS"
 fi
 
+# Parse diff details
+ROW_CHANGE="0"
+COL_CHANGE="0"
+COLS_ADDED="0"
+COLS_REMOVED="0"
+COLS_TYPE_CHANGED="0"
+if [[ "${DIFF_SUMMARY}" != "null" ]]; then
+  ROW_CHANGE=$(echo "${DIFF_SUMMARY}" | jq -r '.row_count_change // 0')
+  COL_CHANGE=$(echo "${DIFF_SUMMARY}" | jq -r '.col_count_change // 0')
+  COLS_ADDED=$(echo "${DIFF_SUMMARY}" | jq -r '.cols_added // 0')
+  COLS_REMOVED=$(echo "${DIFF_SUMMARY}" | jq -r '.cols_removed // 0')
+  COLS_TYPE_CHANGED=$(echo "${DIFF_SUMMARY}" | jq -r '.cols_type_changed // 0')
+fi
+
 echo ""
 echo "  Verification: ${VERIFICATION}"
 echo "  Check status: ${CHECK_STATUS}"
 echo "  Version:      v${VERSION}"
 if [[ "${DIFF_SUMMARY}" != "null" ]]; then
-  ROW_CHANGE=$(echo "${DIFF_SUMMARY}" | jq -r '.row_count_change // 0')
-  COL_CHANGE=$(echo "${DIFF_SUMMARY}" | jq -r '.col_count_change // 0')
-  echo "  Diff:         rows ${ROW_CHANGE:+${ROW_CHANGE}} cols ${COL_CHANGE:+${COL_CHANGE}}"
+  echo "  Diff:         rows ${ROW_CHANGE} cols ${COL_CHANGE}"
 fi
 echo "  Proof URL:    ${PROOF_URL}"
 echo "::endgroup::"
@@ -185,9 +212,77 @@ echo "run_id=${REVISION_ID}" >> "${GITHUB_OUTPUT}"
 echo "proof_url=${PROOF_URL}" >> "${GITHUB_OUTPUT}"
 echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 
-# ── Step 9: Fail if checks failed ────────────────────────────────
+# ── Step 9: GitHub Job Summary ───────────────────────────────────
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  if [[ "${VERIFICATION}" == "PASS" ]]; then
+    BADGE="✅ PASS"
+  else
+    BADGE="❌ FAIL"
+  fi
+
+  {
+    echo "### VisiHub Verify: ${BADGE}"
+    echo ""
+    echo "| | |"
+    echo "|---|---|"
+    echo "| **Dataset** | \`${DATASET_PATH}\` |"
+    echo "| **Version** | v${VERSION} |"
+    echo "| **Rows** | ${ROW_COUNT} |"
+    echo "| **Columns** | ${COL_COUNT} |"
+    echo "| **Size** | ${BYTE_SIZE} bytes |"
+    echo "| **Content hash** | \`${HASH:-none}\` |"
+
+    if [[ "${DIFF_SUMMARY}" != "null" ]]; then
+      echo ""
+      echo "#### Changes from previous version"
+      echo ""
+      if [[ "${ROW_CHANGE}" != "0" ]]; then
+        if [[ "${ROW_CHANGE}" -gt 0 ]]; then
+          echo "- **+${ROW_CHANGE}** rows added"
+        else
+          echo "- **${ROW_CHANGE}** rows removed"
+        fi
+      fi
+      if [[ "${COLS_ADDED}" != "0" ]]; then
+        echo "- **+${COLS_ADDED}** columns added"
+      fi
+      if [[ "${COLS_REMOVED}" != "0" ]]; then
+        echo "- **${COLS_REMOVED}** columns removed"
+      fi
+      if [[ "${COLS_TYPE_CHANGED}" != "0" ]]; then
+        echo "- **${COLS_TYPE_CHANGED}** column types changed"
+      fi
+      if [[ "${ROW_CHANGE}" == "0" && "${COLS_ADDED}" == "0" && "${COLS_REMOVED}" == "0" && "${COLS_TYPE_CHANGED}" == "0" ]]; then
+        echo "- No structural changes"
+      fi
+    fi
+
+    echo ""
+    echo "[Download proof](${PROOF_URL})"
+  } >> "${GITHUB_STEP_SUMMARY}"
+fi
+
+# ── Step 10: Annotations ─────────────────────────────────────────
+if [[ "${VERIFICATION}" == "FAIL" ]]; then
+  # Build a concise failure message for the annotation
+  FAIL_MSG="Snapshot integrity check failed for ${DATASET_PATH} v${VERSION}."
+  if [[ "${DIFF_SUMMARY}" != "null" ]]; then
+    CHANGES=""
+    [[ "${ROW_CHANGE}" != "0" ]] && CHANGES="${CHANGES} rows: ${ROW_CHANGE},"
+    [[ "${COLS_REMOVED}" != "0" ]] && CHANGES="${CHANGES} cols removed: ${COLS_REMOVED},"
+    [[ "${COLS_TYPE_CHANGED}" != "0" ]] && CHANGES="${CHANGES} type changes: ${COLS_TYPE_CHANGED},"
+    if [[ -n "${CHANGES}" ]]; then
+      CHANGES="${CHANGES%,}"  # trim trailing comma
+      FAIL_MSG="${FAIL_MSG} Changes:${CHANGES}"
+    fi
+  fi
+  echo "::error title=VisiHub Verify Failed::${FAIL_MSG}"
+else
+  echo "::notice title=VisiHub Verify Passed::${DATASET_PATH} v${VERSION} — integrity check passed"
+fi
+
+# ── Step 11: Fail if checks failed ───────────────────────────────
 if [[ "${FAIL_ON_CHECK}" == "true" && "${VERIFICATION}" == "FAIL" ]]; then
-  echo "::error::Snapshot integrity check failed for ${DATASET_PATH} v${VERSION}"
   exit 1
 fi
 
