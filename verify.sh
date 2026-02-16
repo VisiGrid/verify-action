@@ -218,6 +218,31 @@ fi
 echo "  Proof URL:    ${PROOF_URL}"
 echo "::endgroup::"
 
+# ── Step 7b: Gate check (if enabled) ─────────────────────────────
+ENFORCE_GATE="${VISIHUB_ENFORCE_GATE:-false}"
+GATE_STATUS=""
+
+if [[ "${ENFORCE_GATE}" == "true" ]]; then
+  echo ""
+  echo "Checking enforcement gate..."
+  GATE_BODY="{\"dataset_id\":${DATASET_ID},\"revision_id\":${REVISION_ID}}"
+  GATE_RESP=$(api_post "/api/gate/check" "${GATE_BODY}") || die "Gate check failed"
+
+  GATE_ALLOW=$(echo "${GATE_RESP}" | jq -r '.allow')
+  GATE_REASONS=$(echo "${GATE_RESP}" | jq -c '.reasons')
+  GATE_PROOF=$(echo "${GATE_RESP}" | jq -r '.proof_url // ""')
+
+  if [[ "${GATE_ALLOW}" == "true" ]]; then
+    GATE_STATUS="ALLOW"
+    echo "  Gate: ALLOW"
+  else
+    GATE_STATUS="DENY"
+    echo "  Gate: DENY"
+    echo "  Reasons:"
+    echo "${GATE_REASONS}" | jq -r '.[] | "    [\(.code)] \(.kind)\(if .column then "(\(.column))" else "" end): \(.message)"'
+  fi
+fi
+
 # ── Step 8: Set outputs ──────────────────────────────────────────
 echo "verification_status=${VERIFICATION}" >> "${GITHUB_OUTPUT}"
 echo "check_status=${CHECK_STATUS}" >> "${GITHUB_OUTPUT}"
@@ -226,6 +251,7 @@ echo "run_id=${REVISION_ID}" >> "${GITHUB_OUTPUT}"
 echo "proof_url=${PROOF_URL}" >> "${GITHUB_OUTPUT}"
 echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
 echo "assertions=${ASSERTIONS_RESULT}" >> "${GITHUB_OUTPUT}"
+echo "gate_status=${GATE_STATUS}" >> "${GITHUB_OUTPUT}"
 
 # ── Step 9: GitHub Job Summary ───────────────────────────────────
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
@@ -283,12 +309,30 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
       echo "${ASSERTIONS_RESULT}" | jq -r '.[] | "| `\(.column)` | \(.kind) | \(.expected // "—") | \(.actual // "—") | \(.tolerance // "—") | \(.status) |"'
     fi
 
+    if [[ -n "${GATE_STATUS}" ]]; then
+      echo ""
+      if [[ "${GATE_STATUS}" == "ALLOW" ]]; then
+        echo "#### Gate: ALLOW"
+      else
+        echo "#### Gate: DENY"
+        echo ""
+        echo "Required assertions that blocked the gate:"
+        echo ""
+        echo "${GATE_REASONS}" | jq -r '.[] | "- **\(.kind)\(if .column then "(\(.column))" else "" end)**: \(.message) (\(.code))"'
+      fi
+    fi
+
     echo ""
     echo "[Download proof](${PROOF_URL})"
   } >> "${GITHUB_STEP_SUMMARY}"
 fi
 
 # ── Step 10: Annotations ─────────────────────────────────────────
+# Gate denial annotations
+if [[ "${GATE_STATUS}" == "DENY" ]]; then
+  echo "${GATE_REASONS}" | jq -r '.[] | "::error title=Gate Denied: \(.kind)\(if .column then "(\(.column))" else "" end)::\(.message) (\(.code))"'
+fi
+
 # Annotation per failed assertion
 if [[ "${ASSERTION_COUNT}" -gt 0 ]]; then
   echo "${ASSERTIONS_RESULT}" | jq -r '.[] | select(.status == "fail") | "::error title=Assertion Failed: \(.kind)(\(.column))::\(.kind)(\(.column)) expected=\(.expected) actual=\(.actual) delta=\(.delta)"'
@@ -314,8 +358,12 @@ else
   echo "::notice title=VisiHub Verify Passed::${DATASET_PATH} v${VERSION} — integrity check passed"
 fi
 
-# ── Step 11: Fail if checks failed ───────────────────────────────
+# ── Step 11: Fail if checks failed or gate denied ────────────────
 if [[ "${FAIL_ON_CHECK}" == "true" && "${VERIFICATION}" == "FAIL" ]]; then
+  exit 1
+fi
+
+if [[ "${ENFORCE_GATE}" == "true" && "${GATE_STATUS}" == "DENY" ]]; then
   exit 1
 fi
 

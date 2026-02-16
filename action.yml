@@ -36,6 +36,10 @@ inputs:
     description: 'Fail the action if integrity checks fail'
     required: false
     default: 'true'
+  enforce_gate:
+    description: 'Call the gate check after verification and fail if any required assertion is denied'
+    required: false
+    default: 'false'
   api_base:
     description: 'VisiHub API base URL'
     required: false
@@ -60,6 +64,9 @@ outputs:
   version:
     description: 'Dataset version number'
     value: ${{ steps.verify.outputs.version }}
+  gate_status:
+    description: 'ALLOW or DENY (only set when enforce_gate is true)'
+    value: ${{ steps.verify.outputs.gate_status }}
 
 runs:
   using: 'composite'
@@ -78,5 +85,6 @@ runs:
         VISIHUB_SOURCE_IDENTITY: ${{ inputs.source_identity }}
         VISIHUB_ASSERTIONS: ${{ inputs.assertions }}
         VISIHUB_FAIL_ON_CHECK: ${{ inputs.fail_on_check_failure }}
+        VISIHUB_ENFORCE_GATE: ${{ inputs.enforce_gate }}
       run: |
         bash "${{ github.action_path }}/verify.sh"
