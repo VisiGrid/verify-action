@@ -184,7 +184,7 @@ On failure, the summary includes specific bullets explaining what changed.
 
 ## Setup
 
-1. Create a VisiHub account and repository at [app.visihub.app](https://app.visihub.app)
+1. Create a VisiHub account and repository at [visihub.app](https://visihub.app)
 2. Generate an API token in **Settings > Tokens**
 3. Add the token as a GitHub secret: `VISIHUB_API_KEY`
 4. Add the action to your workflow
